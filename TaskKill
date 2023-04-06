@@ -1,0 +1,274 @@
+Tasklist
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+#include <Windows.h>
+#include <stdio.h>
+#include <psapi.h>
+#include <tlhelp32.h>
+#include <iostream>
+#include <Wtsapi32.h>
+#include <cstddef>
+#pragma comment(lib, "Wtsapi32.lib")
+
+int main()
+{
+    HANDLE hToken;
+    HANDLE hProcess;
+    PROCESSENTRY32 pe32;
+    HANDLE hprocessSnap;
+    std::cout << "MemoryUsage\t" << "Session#\t" << "UserName\t" << "ProcessName\t" << "PID" << std::endl;
+
+    pe32.dwSize = sizeof(PROCESSENTRY32);
+    hprocessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
+    if (Process32First(hprocessSnap, &pe32))
+    {
+        do
+        {
+            hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
+            if (hProcess)
+            {
+                hToken = nullptr;
+                // Print the process memory usage
+                PROCESS_MEMORY_COUNTERS_EX pmc;
+                if (GetProcessMemoryInfo(hProcess, (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))!=0)
+                {
+                    std::cout << pmc.WorkingSetSize / 1024 << "K";
+                }
+                // print session ID
+                DWORD sessionId;
+                if (ProcessIdToSessionId(pe32.th32ProcessID,&sessionId))
+                {
+                    std::wcout << "\t" << sessionId;
+                }
+//                else{
+//
+//                    std::cout << '0' << "\t";
+//                }
+
+
+                if (OpenProcessToken(hProcess, TOKEN_QUERY, &hToken))
+                {
+                    DWORD tokenInfoLength = 0;
+                    GetTokenInformation(hToken, TokenUser, nullptr, 0, &tokenInfoLength);
+                    TOKEN_USER* tokenUser = (TOKEN_USER*)new char[tokenInfoLength];
+                    if (GetTokenInformation(hToken, TokenUser, tokenUser, tokenInfoLength, &tokenInfoLength))
+                    {
+                        char lpName[MAX_PATH];
+                        char lpDomain[MAX_PATH];
+                        DWORD nameLen = MAX_PATH;
+                        DWORD domainLen = MAX_PATH;
+                        SID_NAME_USE sidType;
+                        if (LookupAccountSid(nullptr, tokenUser->User.Sid, lpName, &nameLen, lpDomain, &domainLen, &sidType))
+                        {
+
+                            std::cout << "\t" << lpDomain << "\\" << lpName;
+                        }
+                    }
+                    CloseHandle(hToken);
+                    delete[] tokenUser;
+                }
+                CloseHandle(hProcess);
+            }
+
+            std::cout << "\t" << pe32.szExeFile << "\t" << pe32.th32ProcessID << std::endl;
+        } while (Process32Next(hprocessSnap, &pe32));
+    }
+    CloseHandle(hprocessSnap);
+    return 0;
+}
+
+
+
+
+
+
+TaskKill
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+#include <windows.h>
+#include <tlhelp32.h>
+#include <iostream>
+#include <string>
+void terminateProcess(DWORD pid);
+bool KillProcess(DWORD pid);
+void killProcessName();
+void killProcessAndChild();
+
+
+
+bool KillProcess(DWORD pid)
+{
+    HANDLE hProcessSnap;
+    PROCESSENTRY32 pe32;
+
+    hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hProcessSnap == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to create process snapshot\n";
+        return false;
+    }
+
+    pe32.dwSize = sizeof(PROCESSENTRY32);
+    if (!Process32First(hProcessSnap, &pe32)) {
+        std::cerr << "Failed to get first process\n";
+        CloseHandle(hProcessSnap);
+        return false;
+    }
+
+    // Find the process with the given pid
+    while (pe32.th32ProcessID != pid) {
+        if (!Process32Next(hProcessSnap, &pe32)) {
+            std::cerr << "Failed to find process with pid " << pid << "\n";
+            CloseHandle(hProcessSnap);
+            return false;
+        }
+    }
+
+    // Open the process and terminate it
+    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+    if (hProcess == NULL) {
+        std::cerr << "Failed to open process with pid " << pid << "\n";
+        CloseHandle(hProcessSnap);
+        return false;
+    }
+
+    BOOL result = TerminateProcess(hProcess, 0);
+    if (!result) {
+        std::cerr << "Failed to terminate process with pid " << pid << "\n";
+        CloseHandle(hProcessSnap);
+        CloseHandle(hProcess);
+        return false;
+    }
+
+    std::cout << "Process with pid " << pid << " has been terminated\n";
+    CloseHandle(hProcessSnap);
+    CloseHandle(hProcess);
+    return true;
+}
+
+
+
+using namespace std;
+
+int main() {
+    string imageName; // replace with the name of the image you want to kill
+    // Input pid of the process you want to kill
+    DWORD pid;
+    //killProcessAndChild();
+    char op = 's';
+//    while(op != 'x') {
+        cout << "1: Terminate process using its PID" << endl;
+        cout << "2---> Terminate process using its NAME" << endl;
+        cout << "3 ---> Terminate process and its child processes" << endl;
+        cin >> op;
+        switch (op) {
+            case '1':
+                //taskkill /pid input pid to kill a process
+                std::cout << "Type the PID of the process you want to kill: \n";
+                std::cin >> pid;
+                KillProcess(pid);
+                break;
+            case '2':
+                //taskkill /im input process name to kill a process
+                killProcessName();
+                break;
+
+            case '3':
+                //taskkill /im input process name to kill a process and its child processes
+                killProcessAndChild();
+                break;
+            //case '4':
+                //killProcessAndChild();
+
+     // }
+    }
+
+
+}
+
+
+
+
+void killProcessAndChild(){
+    std::string processName;
+    std::cout << "Enter the process name to terminate process and its child processes: ";
+    //std::getline(std::cin, processName);
+    std::cin >> processName;
+
+    // Enumerate all processes
+    PROCESSENTRY32 pe;
+    pe.dwSize = sizeof(PROCESSENTRY32);
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (Process32First(hSnapshot, &pe))
+    {
+        do
+        {
+            if (_stricmp(pe.szExeFile, processName.c_str()) == 0)
+            {
+                std::cout << "Terminating process with PID " << pe.th32ProcessID << std::endl;
+                terminateProcess(pe.th32ProcessID);
+            }
+        } while (Process32Next(hSnapshot, &pe));
+    }
+    CloseHandle(hSnapshot);
+}
+
+void killProcessName(){
+    std::string processName;
+    std::cout << "Enter the process name to terminate: ";
+    //std::getline(std::cin, processName);
+    std::cin >> processName;
+
+    // Enumerate all processes
+    PROCESSENTRY32 pe;
+    pe.dwSize = sizeof(PROCESSENTRY32);
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (Process32First(hSnapshot, &pe))
+    {
+        do
+        {
+            if (_stricmp(pe.szExeFile, processName.c_str()) == 0)
+            {
+                std::cout << "Terminating process with PID " << pe.th32ProcessID << std::endl;
+                terminateProcess(pe.th32ProcessID);
+            }
+        } while (Process32Next(hSnapshot, &pe));
+    }
+    CloseHandle(hSnapshot);
+}
+void terminateProcess(DWORD pid)
+{
+    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+    if (hProcess != NULL)
+    {
+        // Enumerate all child processes
+        PROCESSENTRY32 pe;
+        pe.dwSize = sizeof(PROCESSENTRY32);
+        HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (Process32First(hSnapshot, &pe))
+        {
+            do
+            {
+                if (pe.th32ParentProcessID == pid)
+                {
+                    terminateProcess(pe.th32ProcessID);
+                }
+            } while (Process32Next(hSnapshot, &pe));
+        }
+        CloseHandle(hSnapshot);
+
+        // Terminate the process
+        TerminateProcess(hProcess, 0);
+        CloseHandle(hProcess);
+    }
+}
+
+
+
+
+
+
